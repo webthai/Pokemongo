@@ -19,10 +19,18 @@ const TYPE_COLORS = {
   Steel: '#B8B8D0', Fairy: '#EE99AC'
 };
 
+const TYPE_TH = {
+  Normal: 'ธรรมดา', Fire: 'ไฟ', Water: 'น้ำ', Electric: 'ไฟฟ้า', Grass: 'พืช',
+  Ice: 'น้ำแข็ง', Fighting: 'ต่อสู้', Poison: 'พิษ', Ground: 'พื้นดิน',
+  Flying: 'บิน', Psychic: 'จิต', Bug: 'แมลง', Rock: 'หิน', Ghost: 'ผี',
+  Dragon: 'มังกร', Dark: 'มืด', Steel: 'เหล็ก', Fairy: 'นางฟ้า'
+};
+
 // ============================================================
 // STATE
 // ============================================================
 let raidData = null;
+let typeChart = null;       // from type_effectiveness.json
 let currentTier = '1';
 let showPrevious = false;
 
@@ -50,31 +58,34 @@ function formatBangkokDate(dateStr) {
 // BOOTSTRAP — one combined load instead of firing requests one by one
 // ============================================================
 async function bootstrap() {
-  setStatus('กำลังดึงข้อมูลบอสเรด, อีเวนต์ และสภาพอากาศ…');
+  setStatus('กำลังดึงข้อมูลบอสเรด, อีเวนต์, สภาพอากาศ และตารางธาตุ…');
   toggleSpin(true);
 
   try {
-    const [raidRes, cdayRes, weatherRes] = await Promise.all([
+    const [raidRes, cdayRes, weatherRes, typeRes] = await Promise.all([
       fetch(API_BASE + 'raid_bosses.json'),
       fetch(API_BASE + 'community_days.json'),
-      fetch(API_BASE + 'weather_boosts.json')
+      fetch(API_BASE + 'weather_boosts.json'),
+      fetch(API_BASE + 'type_effectiveness.json')
     ]);
 
-    if (!raidRes.ok || !cdayRes.ok || !weatherRes.ok) {
+    if (!raidRes.ok || !cdayRes.ok || !weatherRes.ok || !typeRes.ok) {
       throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
     }
 
-    const [raid, cdays, weather] = await Promise.all([
-      raidRes.json(), cdayRes.json(), weatherRes.json()
+    const [raid, cdays, weather, types] = await Promise.all([
+      raidRes.json(), cdayRes.json(), weatherRes.json(), typeRes.json()
     ]);
 
     raidData = raid;
+    typeChart = types;
+
     renderTierTabs();
     renderBossGrid();
     renderCommunityDay(cdays);
     renderWeather(weather);
 
-    setStatus('เชื่อมต่อสำเร็จ — ข้อมูลอัปเดตล่าสุดแล้ว');
+    setStatus('เชื่อมต่อสำเร็จ — กดที่การ์ดบอสตัวไหนก็ได้เพื่อดูจุดอ่อน');
     document.getElementById('lastUpdated').textContent =
       new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
   } catch (err) {
@@ -132,8 +143,10 @@ function renderBossGrid() {
 
   grid.innerHTML = '';
   bosses.forEach(boss => {
-    const card = document.createElement('div');
+    const card = document.createElement('button');
     card.className = 'boss-card';
+    card.setAttribute('type', 'button');
+    card.setAttribute('aria-haspopup', 'dialog');
 
     const types = (boss.type || []).map(t =>
       `<span class="type-chip" style="background:${TYPE_COLORS[t] || '#999'}">${t}</span>`
@@ -160,7 +173,9 @@ function renderBossGrid() {
         <span>CP ตอนอากาศบูสต์: <b>${boss.min_boosted_cp}–${boss.max_boosted_cp}</b></span>
       </div>
       ${weatherChips ? `<div class="weather-row">${weatherChips}</div>` : ''}
+      <div class="tap-hint">แตะเพื่อดูจุดอ่อน →</div>
     `;
+    card.addEventListener('click', () => openBossModal(boss));
     grid.appendChild(card);
   });
 }
@@ -169,6 +184,119 @@ document.getElementById('prevToggle').addEventListener('change', (e) => {
   showPrevious = e.target.checked;
   renderTierTabs();
   renderBossGrid();
+});
+
+// ============================================================
+// TYPE EFFECTIVENESS — combine dual types the way the games do
+// ============================================================
+// typeChart[attackingType][defendingType] = multiplier (string, e.g. "1.6")
+function computeMatchups(defenderTypes) {
+  const attackTypes = Object.keys(TYPE_COLORS);
+  const rows = attackTypes.map(atk => {
+    let multiplier = 1;
+    defenderTypes.forEach(def => {
+      const raw = typeChart && typeChart[atk] ? typeChart[atk][def] : undefined;
+      multiplier *= raw !== undefined ? parseFloat(raw) : 1;
+    });
+    return { type: atk, multiplier: Math.round(multiplier * 1000) / 1000 };
+  });
+
+  const weaknesses = rows.filter(r => r.multiplier > 1).sort((a, b) => b.multiplier - a.multiplier);
+  const resistances = rows.filter(r => r.multiplier < 1 && r.multiplier > 0).sort((a, b) => a.multiplier - b.multiplier);
+  const immunities = rows.filter(r => r.multiplier === 0);
+
+  return { weaknesses, resistances, immunities };
+}
+
+function matchupPill(row) {
+  const label = TYPE_TH[row.type] || row.type;
+  return `<span class="matchup-pill" style="border-color:${TYPE_COLORS[row.type]}">
+      <span class="type-chip" style="background:${TYPE_COLORS[row.type]}">${row.type}</span>
+      <span class="matchup-th">${label}</span>
+      <span class="matchup-x">×${row.multiplier}</span>
+    </span>`;
+}
+
+// ============================================================
+// BOSS DETAIL MODAL
+// ============================================================
+const modalEl = document.getElementById('bossModal');
+const modalBody = document.getElementById('modalBody');
+
+function openBossModal(boss) {
+  if (!typeChart) return;
+
+  const { weaknesses, resistances, immunities } = computeMatchups(boss.type || []);
+
+  const weakHtml = weaknesses.length
+    ? weaknesses.map(matchupPill).join('')
+    : '<span class="muted">ไม่มีจุดอ่อนธาตุเด่นชัด</span>';
+
+  const resistHtml = resistances.length
+    ? resistances.map(matchupPill).join('')
+    : '<span class="muted">ไม่มีธาตุที่ต้านได้เป็นพิเศษ</span>';
+
+  const immuneHtml = immunities.length
+    ? immunities.map(matchupPill).join('')
+    : '';
+
+  const typesHtml = (boss.type || []).map(t =>
+    `<span class="type-chip lg" style="background:${TYPE_COLORS[t] || '#999'}">${t} · ${TYPE_TH[t] || ''}</span>`
+  ).join('');
+
+  modalBody.innerHTML = `
+    <div class="modal-head">
+      <img class="modal-sprite" src="${SPRITE_BASE}${boss.id}.png" onerror="this.style.visibility='hidden'" alt="${boss.name}">
+      <div>
+        <h3>${boss.name}</h3>
+        <div class="type-row">${typesHtml}</div>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <h4>⚔ ใช้ธาตุนี้ตีจะโดนแรงขึ้น (จุดอ่อน)</h4>
+      <div class="matchup-row">${weakHtml}</div>
+    </div>
+
+    <div class="modal-section">
+      <h4>🛡 บอสต้านธาตุพวกนี้ได้ (โจมตีแล้วไม่ค่อยเจ็บ)</h4>
+      <div class="matchup-row">${resistHtml}</div>
+    </div>
+
+    ${immuneHtml ? `
+    <div class="modal-section">
+      <h4>🚫 ไม่โดนธาตุนี้เลย (ภูมิคุ้มกัน)</h4>
+      <div class="matchup-row">${immuneHtml}</div>
+    </div>` : ''}
+
+    <div class="modal-section">
+      <h4>📊 CP โดยประมาณ</h4>
+      <div class="cp-row modal-cp">
+        <span>ปกติ: <b>${boss.min_unboosted_cp}–${boss.max_unboosted_cp}</b></span>
+        <span>อากาศบูสต์: <b>${boss.min_boosted_cp}–${boss.max_boosted_cp}</b></span>
+        ${boss.possible_shiny ? '<span class="boss-shiny">✦ ตัวนี้อาจเป็นเชนี่ได้</span>' : ''}
+      </div>
+    </div>
+  `;
+
+  modalEl.classList.add('open');
+  modalEl.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  document.getElementById('modalCloseBtn').focus();
+}
+
+function closeBossModal() {
+  modalEl.classList.remove('open');
+  modalEl.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+
+document.getElementById('modalCloseBtn').addEventListener('click', closeBossModal);
+modalEl.addEventListener('click', (e) => {
+  if (e.target === modalEl) closeBossModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && modalEl.classList.contains('open')) closeBossModal();
 });
 
 // ============================================================
