@@ -33,6 +33,50 @@ let raidData = null;
 let typeChart = null;       // from type_effectiveness.json
 let currentTier = '1';
 let showPrevious = false;
+let searchQuery = '';
+let selectedTypes = new Set();
+
+function renderTypeFilterRow() {
+  const row = document.getElementById('typeFilterRow');
+  row.innerHTML = '';
+  Object.keys(TYPE_COLORS).forEach(type => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'type-filter-chip' + (selectedTypes.has(type) ? ' active' : '');
+    chip.style.background = TYPE_COLORS[type];
+    chip.textContent = type;
+    chip.title = TYPE_TH[type] || type;
+    chip.addEventListener('click', () => {
+      if (selectedTypes.has(type)) selectedTypes.delete(type);
+      else selectedTypes.add(type);
+      renderTypeFilterRow();
+      onFiltersChanged();
+    });
+    row.appendChild(chip);
+  });
+}
+
+function onFiltersChanged() {
+  const active = searchQuery.trim() !== '' || selectedTypes.size > 0;
+  document.getElementById('clearFilters').hidden = !active;
+  document.getElementById('filterNote').hidden = !active;
+  document.getElementById('tierTabs').style.opacity = active ? '0.4' : '1';
+  document.getElementById('tierTabs').style.pointerEvents = active ? 'none' : 'auto';
+  renderBossGrid();
+}
+
+document.getElementById('nameSearch').addEventListener('input', (e) => {
+  searchQuery = e.target.value;
+  onFiltersChanged();
+});
+
+document.getElementById('clearFilters').addEventListener('click', () => {
+  searchQuery = '';
+  selectedTypes.clear();
+  document.getElementById('nameSearch').value = '';
+  renderTypeFilterRow();
+  onFiltersChanged();
+});
 
 // ============================================================
 // CLOCK — always Thailand time, per project convention
@@ -81,6 +125,7 @@ async function bootstrap() {
     typeChart = types;
 
     renderTierTabs();
+    renderTypeFilterRow();
     renderBossGrid();
     renderCommunityDay(cdays);
     renderWeather(weather);
@@ -129,20 +174,46 @@ function renderTierTabs() {
   });
 }
 
+function getVisibleBosses() {
+  const bucket = showPrevious ? raidData.previous : raidData.current;
+  const filtersActive = searchQuery.trim() !== '' || selectedTypes.size > 0;
+  const q = searchQuery.trim().toLowerCase();
+
+  if (!filtersActive) {
+    const list = (bucket && bucket[currentTier]) ? bucket[currentTier] : [];
+    return list.map(b => ({ boss: b, tier: currentTier }));
+  }
+
+  // search mode — flatten every tier, tag each boss with its tier
+  const out = [];
+  TIER_ORDER.forEach(tier => {
+    const list = (bucket && bucket[tier]) ? bucket[tier] : [];
+    list.forEach(boss => {
+      const nameMatch = !q || boss.name.toLowerCase().includes(q);
+      const typeMatch = selectedTypes.size === 0 ||
+        (boss.type || []).some(t => selectedTypes.has(t));
+      if (nameMatch && typeMatch) out.push({ boss, tier });
+    });
+  });
+  return out;
+}
+
 function renderBossGrid() {
   const grid = document.getElementById('bossGrid');
   if (!raidData) return;
 
-  const bucket = showPrevious ? raidData.previous : raidData.current;
-  const bosses = (bucket && bucket[currentTier]) ? bucket[currentTier] : [];
+  const entries = getVisibleBosses();
+  const filtersActive = searchQuery.trim() !== '' || selectedTypes.size > 0;
 
-  if (bosses.length === 0) {
-    grid.innerHTML = '<p class="muted">ยังไม่มีข้อมูลบอสระดับนี้ในตอนนี้</p>';
+  if (entries.length === 0) {
+    grid.innerHTML = filtersActive
+      ? '<p class="muted">ไม่พบโปเกมอนที่ตรงกับตัวกรอง ลองเปลี่ยนคำค้นหาหรือธาตุดู</p>'
+      : '<p class="muted">ยังไม่มีข้อมูลบอสระดับนี้ในตอนนี้</p>';
     return;
   }
 
   grid.innerHTML = '';
-  bosses.forEach(boss => {
+  entries.forEach(({ boss, tier }) => {
     const card = document.createElement('button');
     card.className = 'boss-card';
     card.setAttribute('type', 'button');
@@ -157,6 +228,7 @@ function renderBossGrid() {
     ).join('');
 
     card.innerHTML = `
+      ${filtersActive ? `<span class="tier-badge">${TIER_LABEL[tier]}</span>` : ''}
       <div class="boss-card-top">
         <img class="boss-sprite" loading="lazy"
              src="${SPRITE_BASE}${boss.id}.png"

@@ -53,6 +53,18 @@
       </label>
     </div>
 
+    <div class="filter-row">
+      <div class="search-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" id="nameSearch" placeholder="ค้นหาชื่อโปเกมอน…" autocomplete="off">
+      </div>
+      <button id="clearFilters" class="clear-btn" hidden>ล้างตัวกรอง</button>
+    </div>
+
+    <div class="type-filter-row" id="typeFilterRow"></div>
+
+    <p class="filter-note" id="filterNote" hidden>กำลังค้นหาข้ามทุก Tier</p>
+
     <div class="tier-tabs" id="tierTabs" role="tablist"></div>
 
     <div class="boss-grid" id="bossGrid">
