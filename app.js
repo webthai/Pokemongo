@@ -32,12 +32,46 @@ const TYPE_TH = {
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
+// Prefixes that appear in raid/event boss names but aren't part of the
+// pokemon_types.json base species name (e.g. "Shadow Onix" -> "Onix").
+const NAME_PREFIXES = ['Shadow', 'Mega', 'Alolan', 'Galarian', 'Hisuian', 'Paldean', 'Primal'];
+
+function buildTypesByName(pokeTypes) {
+  const map = {};
+  (pokeTypes || []).forEach(entry => {
+    const key = entry.pokemon_name.toLowerCase();
+    // don't overwrite a base-form entry with a form-variant one
+    if (!map[key] || !entry.form) map[key] = entry.type;
+    // also index "<Form> <Name>" style keys, e.g. "alolan raichu"
+    if (entry.form && entry.form.toLowerCase() !== 'normal') {
+      map[`${entry.form.toLowerCase()} ${key}`] = entry.type;
+    }
+  });
+  return map;
+}
+
+function lookupTypes(rawName) {
+  if (!rawName) return [];
+  const direct = typesByName[rawName.toLowerCase()];
+  if (direct) return direct;
+
+  for (const prefix of NAME_PREFIXES) {
+    if (rawName.startsWith(prefix + ' ')) {
+      const rest = rawName.slice(prefix.length + 1);
+      const found = typesByName[rest.toLowerCase()];
+      if (found) return found;
+    }
+  }
+  return [];
+}
+
 // ============================================================
 // STATE
 // ============================================================
 let raidList = [];          // flat array from ScrapedDuck
 let tierOrder = [];         // tiers actually present, in canonical order
 let typeChart = null;       // from pogoapi type_effectiveness.json
+let typesByName = {};       // lowercased pokemon name -> ["Fire","Dragon"], from pogoapi pokemon_types.json
 let currentTier = null;
 let searchQuery = '';
 let selectedTypes = new Set();
@@ -90,23 +124,25 @@ async function bootstrap() {
   toggleSpin(true);
 
   try {
-    const [raidsRes, eventsRes, weatherRes, typeRes] = await Promise.all([
+    const [raidsRes, eventsRes, weatherRes, typeRes, pokeTypesRes] = await Promise.all([
       fetch(RAIDS_URL),
       fetch(EVENTS_URL),
       fetch(POGOAPI_BASE + 'weather_boosts.json'),
-      fetch(POGOAPI_BASE + 'type_effectiveness.json')
+      fetch(POGOAPI_BASE + 'type_effectiveness.json'),
+      fetch(POGOAPI_BASE + 'pokemon_types.json')
     ]);
 
-    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok) {
+    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok || !pokeTypesRes.ok) {
       throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
     }
 
-    const [raids, events, weather, types] = await Promise.all([
-      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json()
+    const [raids, events, weather, types, pokeTypes] = await Promise.all([
+      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json(), pokeTypesRes.json()
     ]);
 
     raidList = raids;
     typeChart = types;
+    typesByName = buildTypesByName(pokeTypes);
 
     // Figure out which tiers actually exist right now, in a sensible order
     const present = new Set(raidList.map(b => b.tier));
@@ -326,25 +362,29 @@ const modalBody = document.getElementById('modalBody');
 function openBossModal(boss, typeNames) {
   if (!typeChart) return;
 
-  const { weaknesses, resistances, immunities } = computeMatchups(typeNames);
+  const knownTypes = typeNames && typeNames.length > 0;
+  const { weaknesses, resistances, immunities } = knownTypes
+    ? computeMatchups(typeNames)
+    : { weaknesses: [], resistances: [], immunities: [] };
 
-  const weakHtml = weaknesses.length
-    ? weaknesses.map(matchupPill).join('')
-    : '<span class="muted">ไม่มีจุดอ่อนธาตุเด่นชัด</span>';
+  const weakHtml = !knownTypes
+    ? '<span class="muted">ไม่ทราบธาตุของบอสตัวนี้ (แหล่งข้อมูลไม่ได้แนบธาตุมาให้)</span>'
+    : weaknesses.length ? weaknesses.map(matchupPill).join('') : '<span class="muted">ไม่มีจุดอ่อนธาตุเด่นชัด</span>';
 
-  const resistHtml = resistances.length
-    ? resistances.map(matchupPill).join('')
-    : '<span class="muted">ไม่มีธาตุที่ต้านได้เป็นพิเศษ</span>';
+  const resistHtml = !knownTypes
+    ? ''
+    : resistances.length ? resistances.map(matchupPill).join('') : '<span class="muted">ไม่มีธาตุที่ต้านได้เป็นพิเศษ</span>';
 
-  const immuneHtml = immunities.length ? immunities.map(matchupPill).join('') : '';
+  const immuneHtml = knownTypes && immunities.length ? immunities.map(matchupPill).join('') : '';
 
-  const typesHtml = typeNames.map(t =>
-    `<span class="type-chip lg" style="background:${TYPE_COLORS[t] || '#999'}">${t} · ${TYPE_TH[t] || ''}</span>`
-  ).join('');
+  const typesHtml = knownTypes
+    ? typeNames.map(t => `<span class="type-chip lg" style="background:${TYPE_COLORS[t] || '#999'}">${t} · ${TYPE_TH[t] || ''}</span>`).join('')
+    : '';
 
   const cp = boss.combatPower || {};
   const normal = cp.normal || {};
   const boosted = cp.boosted || {};
+  const hasCp = normal.min !== undefined || boosted.min !== undefined;
 
   modalBody.innerHTML = `
     <div class="modal-head">
@@ -360,10 +400,11 @@ function openBossModal(boss, typeNames) {
       <div class="matchup-row">${weakHtml}</div>
     </div>
 
+    ${resistHtml ? `
     <div class="modal-section">
       <h4>🛡 บอสต้านธาตุพวกนี้ได้ (โจมตีแล้วไม่ค่อยเจ็บ)</h4>
       <div class="matchup-row">${resistHtml}</div>
-    </div>
+    </div>` : ''}
 
     ${immuneHtml ? `
     <div class="modal-section">
@@ -371,6 +412,7 @@ function openBossModal(boss, typeNames) {
       <div class="matchup-row">${immuneHtml}</div>
     </div>` : ''}
 
+    ${hasCp ? `
     <div class="modal-section">
       <h4>📊 CP โดยประมาณ</h4>
       <div class="cp-row modal-cp">
@@ -378,7 +420,7 @@ function openBossModal(boss, typeNames) {
         <span>อากาศบูสต์: <b>${boosted.min ?? '?'}–${boosted.max ?? '?'}</b></span>
         ${boss.canBeShiny ? '<span class="boss-shiny">✦ ตัวนี้อาจเป็นเชนี่ได้</span>' : ''}
       </div>
-    </div>
+    </div>` : (boss.canBeShiny ? `<div class="modal-section"><span class="boss-shiny">✦ ตัวนี้อาจเป็นเชนี่ได้</span></div>` : '')}
   `;
 
   modalEl.classList.add('open');
@@ -478,7 +520,7 @@ function renderMaxBattles(events) {
     return;
   }
 
-  body.innerHTML = maxEvents.map(ev => {
+  body.innerHTML = maxEvents.map((ev, evIdx) => {
     const start = toComparableDate(ev.start);
     const end = toComparableDate(ev.end);
     const isLive = start && start <= now && (!end || end >= now);
@@ -491,9 +533,11 @@ function renderMaxBattles(events) {
       : '';
 
     const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
-    const bossChips = bosses.map(b =>
-      `<span class="max-boss-chip"><img src="${b.image}" alt="">${b.name}</span>`
+    const bossChipsHtml = bosses.map((b, i) =>
+      `<button type="button" class="max-boss-chip" data-max-idx="${i}"><img src="${b.image}" alt="">${b.name}</button>`
     ).join('');
+
+    const cardId = `max-${evIdx}`;
 
     return `
       <div class="max-card">
@@ -501,12 +545,28 @@ function renderMaxBattles(events) {
         <div class="max-info">
           <div class="max-name">${ev.name}</div>
           ${dateLabel ? `<div class="max-date">${dateLabel}</div>` : ''}
-          ${bossChips ? `<div class="max-boss-row">${bossChips}</div>` : ''}
+          ${bossChipsHtml ? `<div class="max-boss-row" id="${cardId}">${bossChipsHtml}</div>` : ''}
         </div>
         ${stateHtml}
       </div>
     `;
   }).join('');
+
+  // wire up click handlers for boss chips (delegated per event card, since
+  // innerHTML above wiped any inline listeners)
+  maxEvents.forEach((ev, evIdx) => {
+    const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
+    const row = document.getElementById(`max-${evIdx}`);
+    if (!row) return;
+    row.querySelectorAll('.max-boss-chip').forEach(chip => {
+      const idx = Number(chip.dataset.maxIdx);
+      const boss = bosses[idx];
+      chip.addEventListener('click', () => {
+        const types = lookupTypes(boss.name);
+        openBossModal({ name: boss.name, image: boss.image, canBeShiny: boss.canBeShiny }, types);
+      });
+    });
+  });
 }
 
 // ============================================================

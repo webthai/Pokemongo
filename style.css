@@ -549,11 +549,16 @@ a{ color: var(--teal); }
   align-items: center;
   gap: 4px;
   font-size: 11px;
+  font-family: inherit;
+  color: inherit;
   padding: 2px 8px 2px 2px;
   border-radius: 999px;
   background: var(--panel);
   border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
 }
+.max-boss-chip:hover{ border-color: var(--teal); color: var(--teal); }
 .max-boss-chip img{ width: 16px; height: 16px; object-fit: contain; }
 .max-state{
   flex-shrink: 0;
