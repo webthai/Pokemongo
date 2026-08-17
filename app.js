@@ -473,11 +473,22 @@ function renderCommunityDay(events) {
   }
 
   const now = new Date();
-  // Prefer one that's ongoing or coming up soon; otherwise fall back to the most recent past one
+  // Prefer one that's ongoing or coming up soon; otherwise fall back to the most recent past one.
+  // Fails open: an unparseable/missing end date counts as "still relevant" rather than being dropped.
   const upcoming = cdays
-    .filter(e => { const end = toComparableDate(e.end); return !end || end >= now; })
-    .sort((a, b) => (toComparableDate(a.start) || 0) - (toComparableDate(b.start) || 0));
-  const target = upcoming[0] || cdays.sort((a, b) => (toComparableDate(b.start) || 0) - (toComparableDate(a.start) || 0))[0];
+    .filter(e => { const end = toComparableDate(e.end); return !end || isNaN(end) || end >= now; })
+    .sort((a, b) => {
+      const da = toComparableDate(a.start), db = toComparableDate(b.start);
+      const va = da && !isNaN(da) ? da.getTime() : Infinity;
+      const vb = db && !isNaN(db) ? db.getTime() : Infinity;
+      return va - vb;
+    });
+  const target = upcoming[0] || cdays.sort((a, b) => {
+    const da = toComparableDate(a.start), db = toComparableDate(b.start);
+    const va = da && !isNaN(da) ? da.getTime() : -Infinity;
+    const vb = db && !isNaN(db) ? db.getTime() : -Infinity;
+    return vb - va;
+  })[0];
 
   const extra = (target.extraData && target.extraData.communityday) || {};
   const spawns = (extra.spawns || []).map(p =>
@@ -521,28 +532,49 @@ function renderCommunityDay(events) {
 // ============================================================
 // MAX BATTLES / DYNAMAX (from ScrapedDuck events.json)
 // ============================================================
+function isMaxBattleEvent(ev) {
+  if (ev.eventType === 'max-battles' || ev.eventType === 'max-mondays') return true;
+  if (ev.heading && /max/i.test(ev.heading)) return true;
+  if (ev.name && /max\s*(battle|monday)/i.test(ev.name)) return true;
+  return false;
+}
+
 function renderMaxBattles(events) {
   const body = document.getElementById('maxBody');
   const now = new Date();
+  const allEvents = events || [];
 
-  const maxEvents = (events || [])
-    .filter(e => e.eventType === 'max-battles' || e.eventType === 'max-mondays')
-    .filter(e => {
-      const end = toComparableDate(e.end);
-      return !end || end >= now; // drop ones that have already ended
+  // Deliberately NOT filtering out "already ended" events here — ScrapedDuck's
+  // feed only contains current/near-term events anyway, and being strict
+  // about parsing end-dates risks silently dropping a valid live event if
+  // its date string doesn't match our assumptions.
+  const maxEvents = allEvents
+    .filter(isMaxBattleEvent)
+    .sort((a, b) => {
+      const da = toComparableDate(a.start);
+      const db = toComparableDate(b.start);
+      const va = da && !isNaN(da) ? da.getTime() : Infinity;
+      const vb = db && !isNaN(db) ? db.getTime() : Infinity;
+      return va - vb;
     })
-    .sort((a, b) => (toComparableDate(a.start) || 0) - (toComparableDate(b.start) || 0))
     .slice(0, 4);
 
   if (maxEvents.length === 0) {
-    body.innerHTML = '<p class="muted">ไม่มีข้อมูล Max Battles ในขณะนี้</p>';
+    const typesPresent = [...new Set(allEvents.map(e => e.eventType))].slice(0, 8).join(', ') || 'ไม่มีข้อมูลอีเวนต์เลย';
+    body.innerHTML = `
+      <p class="muted">ไม่พบอีเวนต์ Max Battles ในข้อมูลตอนนี้</p>
+      <p class="muted" style="font-size:11px;margin-top:4px;">
+        (debug: พบทั้งหมด ${allEvents.length} อีเวนต์ ประเภทที่เจอ: ${typesPresent})
+      </p>`;
     return;
   }
 
   body.innerHTML = maxEvents.map((ev, evIdx) => {
     const start = toComparableDate(ev.start);
     const end = toComparableDate(ev.end);
-    const isLive = start && start <= now && (!end || end >= now);
+    const startValid = start && !isNaN(start);
+    const endValid = end && !isNaN(end);
+    const isLive = startValid && start <= now && (!endValid || end >= now);
     const stateHtml = isLive
       ? '<span class="max-state live">กำลังจัดอยู่</span>'
       : '<span class="max-state upcoming">เร็วๆ นี้</span>';
