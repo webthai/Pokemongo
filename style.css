@@ -516,6 +516,57 @@ a{ color: var(--teal); }
 }
 .move-item b{ color: var(--text); }
 
+/* ---------- max battles ---------- */
+.max-body{ display: flex; flex-direction: column; gap: 10px; }
+.max-card{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.max-icon{
+  width: 44px; height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 5px rgba(0,0,0,0.4));
+}
+.max-info{ min-width: 0; flex: 1; }
+.max-name{
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.max-date{ font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+.max-boss-row{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.max-boss-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px 2px 2px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.max-boss-chip img{ width: 16px; height: 16px; object-fit: contain; }
+.max-state{
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.max-state.live{ background: rgba(45,212,191,0.16); color: var(--teal); border: 1px solid rgba(45,212,191,0.4); }
+.max-state.upcoming{ background: rgba(167,139,250,0.16); color: var(--violet); border: 1px solid rgba(167,139,250,0.4); }
+
 /* ---------- weather grid ---------- */
 .weather-grid{
   display: grid;

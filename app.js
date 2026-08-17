@@ -75,6 +75,13 @@ function formatEventDate(iso) {
   return `${d} ${months[m - 1]} ${y}, ${hh}:${mm} น.`;
 }
 
+// Turns an event's start/end string into a real comparable Date, using the
+// same "Z = true UTC, no-Z = literal Bangkok wall clock" rule as formatEventDate.
+function toComparableDate(iso) {
+  if (!iso) return null;
+  return iso.endsWith('Z') ? new Date(iso) : new Date(iso + '+07:00');
+}
+
 // ============================================================
 // BOOTSTRAP — one combined load instead of firing requests one by one
 // ============================================================
@@ -112,6 +119,7 @@ async function bootstrap() {
     renderTypeFilterRow();
     renderBossGrid();
     renderCommunityDay(events);
+    renderMaxBattles(events);
     renderWeather(weather);
 
     setStatus('เชื่อมต่อสำเร็จ — ข้อมูลตรงจาก LeekDuck.com · กดที่การ์ดบอสเพื่อดูจุดอ่อน');
@@ -406,9 +414,9 @@ function renderCommunityDay(events) {
   const now = new Date();
   // Prefer one that's ongoing or coming up soon; otherwise fall back to the most recent past one
   const upcoming = cdays
-    .filter(e => !e.end || e.end.endsWith('Z') ? (!e.end || new Date(e.end) >= now) : true)
-    .sort((a, b) => new Date(a.start || 0) - new Date(b.start || 0));
-  const target = upcoming[0] || cdays.sort((a, b) => new Date(b.start || 0) - new Date(a.start || 0))[0];
+    .filter(e => { const end = toComparableDate(e.end); return !end || end >= now; })
+    .sort((a, b) => (toComparableDate(a.start) || 0) - (toComparableDate(b.start) || 0));
+  const target = upcoming[0] || cdays.sort((a, b) => (toComparableDate(b.start) || 0) - (toComparableDate(a.start) || 0))[0];
 
   const extra = (target.extraData && target.extraData.communityday) || {};
   const spawns = (extra.spawns || []).map(p =>
@@ -447,6 +455,58 @@ function renderCommunityDay(events) {
     </div>` : ''}
     ${target.link ? `<a class="cday-link" href="${target.link}" target="_blank" rel="noopener">ดูรายละเอียดเต็มบน LeekDuck →</a>` : ''}
   `;
+}
+
+// ============================================================
+// MAX BATTLES / DYNAMAX (from ScrapedDuck events.json)
+// ============================================================
+function renderMaxBattles(events) {
+  const body = document.getElementById('maxBody');
+  const now = new Date();
+
+  const maxEvents = (events || [])
+    .filter(e => e.eventType === 'max-battles' || e.eventType === 'max-mondays')
+    .filter(e => {
+      const end = toComparableDate(e.end);
+      return !end || end >= now; // drop ones that have already ended
+    })
+    .sort((a, b) => (toComparableDate(a.start) || 0) - (toComparableDate(b.start) || 0))
+    .slice(0, 4);
+
+  if (maxEvents.length === 0) {
+    body.innerHTML = '<p class="muted">ไม่มีข้อมูล Max Battles ในขณะนี้</p>';
+    return;
+  }
+
+  body.innerHTML = maxEvents.map(ev => {
+    const start = toComparableDate(ev.start);
+    const end = toComparableDate(ev.end);
+    const isLive = start && start <= now && (!end || end >= now);
+    const stateHtml = isLive
+      ? '<span class="max-state live">กำลังจัดอยู่</span>'
+      : '<span class="max-state upcoming">เร็วๆ นี้</span>';
+
+    const dateLabel = ev.start
+      ? (ev.end ? `${formatEventDate(ev.start)} – ${formatEventDate(ev.end)}` : formatEventDate(ev.start))
+      : '';
+
+    const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
+    const bossChips = bosses.map(b =>
+      `<span class="max-boss-chip"><img src="${b.image}" alt="">${b.name}</span>`
+    ).join('');
+
+    return `
+      <div class="max-card">
+        ${ev.image ? `<img class="max-icon" src="${ev.image}" onerror="this.style.visibility='hidden'" alt="">` : ''}
+        <div class="max-info">
+          <div class="max-name">${ev.name}</div>
+          ${dateLabel ? `<div class="max-date">${dateLabel}</div>` : ''}
+          ${bossChips ? `<div class="max-boss-row">${bossChips}</div>` : ''}
+        </div>
+        ${stateHtml}
+      </div>
+    `;
+  }).join('');
 }
 
 // ============================================================
