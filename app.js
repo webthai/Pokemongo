@@ -124,25 +124,34 @@ async function bootstrap() {
   toggleSpin(true);
 
   try {
-    const [raidsRes, eventsRes, weatherRes, typeRes, pokeTypesRes] = await Promise.all([
+    const [raidsRes, eventsRes, weatherRes, typeRes] = await Promise.all([
       fetch(RAIDS_URL),
       fetch(EVENTS_URL),
       fetch(POGOAPI_BASE + 'weather_boosts.json'),
-      fetch(POGOAPI_BASE + 'type_effectiveness.json'),
-      fetch(POGOAPI_BASE + 'pokemon_types.json')
+      fetch(POGOAPI_BASE + 'type_effectiveness.json')
     ]);
 
-    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok || !pokeTypesRes.ok) {
+    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok) {
       throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
     }
 
-    const [raids, events, weather, types, pokeTypes] = await Promise.all([
-      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json(), pokeTypesRes.json()
+    const [raids, events, weather, types] = await Promise.all([
+      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json()
     ]);
 
     raidList = raids;
     typeChart = types;
-    typesByName = buildTypesByName(pokeTypes);
+
+    // Optional enrichment: name -> type lookup for Max Battle bosses.
+    // Fetched separately and non-fatally — if pogoapi's pokemon_types.json
+    // is down or renamed, the rest of the dashboard must still work; boss
+    // weakness lookups just fall back to "ไม่ทราบธาตุ" for that session.
+    try {
+      const pokeTypesRes = await fetch(POGOAPI_BASE + 'pokemon_types.json');
+      if (pokeTypesRes.ok) typesByName = buildTypesByName(await pokeTypesRes.json());
+    } catch (typeErr) {
+      console.warn('pokemon_types.json failed to load, weakness lookup for Max Battles will be limited:', typeErr);
+    }
 
     // Figure out which tiers actually exist right now, in a sensible order
     const present = new Set(raidList.map(b => b.tier));
@@ -154,9 +163,11 @@ async function bootstrap() {
     renderTierTabs();
     renderTypeFilterRow();
     renderBossGrid();
-    renderCommunityDay(events);
-    renderMaxBattles(events);
-    renderWeather(weather);
+    // Each of these is independent — a bug or bad data in one section
+    // should never prevent the sections after it from rendering.
+    safeRender('Community Day', () => renderCommunityDay(events));
+    safeRender('Max Battles', () => renderMaxBattles(events));
+    safeRender('Weather', () => renderWeather(weather));
 
     setStatus('เชื่อมต่อสำเร็จ — ข้อมูลตรงจาก LeekDuck.com · กดที่การ์ดบอสเพื่อดูจุดอ่อน');
     document.getElementById('lastUpdated').textContent =
@@ -168,6 +179,14 @@ async function bootstrap() {
       '<p class="muted">ไม่สามารถโหลดข้อมูลบอสเรดได้ในตอนนี้</p>';
   } finally {
     toggleSpin(false);
+  }
+}
+
+function safeRender(label, fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(`Render failed for "${label}":`, err);
   }
 }
 
