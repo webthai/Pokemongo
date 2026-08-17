@@ -1,15 +1,19 @@
 // ============================================================
 // CONFIG
 // ============================================================
-// PoGo API — community-run, public, read-only JSON. No key needed.
+// Raid & event data: ScrapedDuck — scrapes LeekDuck.com directly (with
+// permission), updated every few minutes. Far more current than generic
+// "gamemaster snapshot" APIs.
+// Docs: https://github.com/bigfoott/ScrapedDuck/wiki
+const RAIDS_URL = 'https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/raids.json';
+const EVENTS_URL = 'https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/events.json';
+
+// Type chart & weather-boost table: these are fixed game mechanics that
+// barely ever change, so a slower-moving community API is fine here.
 // Docs: https://pogoapi.net/documentation
-const API_BASE = 'https://pogoapi.net/api/v1/';
+const POGOAPI_BASE = 'https://pogoapi.net/api/v1/';
 
-// Sprite images (public community sprite mirror, used by many fan tools)
-const SPRITE_BASE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/';
-
-const TIER_ORDER = ['1', '2', '3', '4', '5', '6', 'mega'];
-const TIER_LABEL = { '1': 'Tier 1', '2': 'Tier 2', '3': 'Tier 3', '4': 'Tier 4', '5': 'Tier 5', '6': 'Tier 6', mega: 'Mega' };
+const TIER_CANONICAL_ORDER = ['1-Star Raids', '3-Star Raids', '5-Star Raids', 'Mega Raids', 'Elite Raids'];
 
 const TYPE_COLORS = {
   Normal: '#A8A878', Fire: '#F08030', Water: '#6890F0', Electric: '#F8D030',
@@ -26,16 +30,114 @@ const TYPE_TH = {
   Dragon: 'มังกร', Dark: 'มืด', Steel: 'เหล็ก', Fairy: 'นางฟ้า'
 };
 
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
 // ============================================================
 // STATE
 // ============================================================
-let raidData = null;
-let typeChart = null;       // from type_effectiveness.json
-let currentTier = '1';
-let showPrevious = false;
+let raidList = [];          // flat array from ScrapedDuck
+let tierOrder = [];         // tiers actually present, in canonical order
+let typeChart = null;       // from pogoapi type_effectiveness.json
+let currentTier = null;
 let searchQuery = '';
 let selectedTypes = new Set();
 
+// ============================================================
+// CLOCK — always Thailand time, per project convention
+// ============================================================
+function tickClock() {
+  const el = document.getElementById('clock');
+  const now = new Date();
+  el.textContent = now.toLocaleString('th-TH', {
+    timeZone: 'Asia/Bangkok',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// Global (simultaneous-everywhere) event timestamps end in "Z" (true UTC) —
+// convert those properly. Events without "Z" already represent each
+// region's own local wall-clock time, which for us IS Bangkok time, so we
+// display the digits as written instead of re-interpreting them.
+function formatEventDate(iso) {
+  if (!iso) return '';
+  if (iso.endsWith('Z')) {
+    return new Date(iso).toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }) + ' น. (เวลาไทย)';
+  }
+  const [datePart, timePart] = iso.split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [hh, mm] = (timePart || '00:00').split(':');
+  const months = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  return `${d} ${months[m - 1]} ${y}, ${hh}:${mm} น.`;
+}
+
+// ============================================================
+// BOOTSTRAP — one combined load instead of firing requests one by one
+// ============================================================
+async function bootstrap() {
+  setStatus('กำลังดึงข้อมูลบอสเรดจาก LeekDuck, อีเวนต์ และตารางธาตุ…');
+  toggleSpin(true);
+
+  try {
+    const [raidsRes, eventsRes, weatherRes, typeRes] = await Promise.all([
+      fetch(RAIDS_URL),
+      fetch(EVENTS_URL),
+      fetch(POGOAPI_BASE + 'weather_boosts.json'),
+      fetch(POGOAPI_BASE + 'type_effectiveness.json')
+    ]);
+
+    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok) {
+      throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
+    }
+
+    const [raids, events, weather, types] = await Promise.all([
+      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json()
+    ]);
+
+    raidList = raids;
+    typeChart = types;
+
+    // Figure out which tiers actually exist right now, in a sensible order
+    const present = new Set(raidList.map(b => b.tier));
+    tierOrder = TIER_CANONICAL_ORDER.filter(t => present.has(t));
+    // catch anything unexpected (e.g. a new tier name LeekDuck introduces later)
+    present.forEach(t => { if (!tierOrder.includes(t)) tierOrder.push(t); });
+    if (!currentTier || !tierOrder.includes(currentTier)) currentTier = tierOrder[0] || null;
+
+    renderTierTabs();
+    renderTypeFilterRow();
+    renderBossGrid();
+    renderCommunityDay(events);
+    renderWeather(weather);
+
+    setStatus('เชื่อมต่อสำเร็จ — ข้อมูลตรงจาก LeekDuck.com · กดที่การ์ดบอสเพื่อดูจุดอ่อน');
+    document.getElementById('lastUpdated').textContent =
+      new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
+  } catch (err) {
+    console.error(err);
+    setStatus('โหลดข้อมูลไม่สำเร็จ ลองกดปุ่มรีเฟรชอีกครั้ง');
+    document.getElementById('bossGrid').innerHTML =
+      '<p class="muted">ไม่สามารถโหลดข้อมูลบอสเรดได้ในตอนนี้</p>';
+  } finally {
+    toggleSpin(false);
+  }
+}
+
+function setStatus(text) {
+  document.getElementById('statusLine').textContent = text;
+}
+
+function toggleSpin(on) {
+  document.getElementById('refreshBtn').classList.toggle('spinning', on);
+}
+
+// ============================================================
+// FILTERS (name search + type chips)
+// ============================================================
 function renderTypeFilterRow() {
   const row = document.getElementById('typeFilterRow');
   row.innerHTML = '';
@@ -79,91 +181,17 @@ document.getElementById('clearFilters').addEventListener('click', () => {
 });
 
 // ============================================================
-// CLOCK — always Thailand time, per project convention
-// ============================================================
-function tickClock() {
-  const el = document.getElementById('clock');
-  const now = new Date();
-  el.textContent = now.toLocaleString('th-TH', {
-    timeZone: 'Asia/Bangkok',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-  });
-}
-setInterval(tickClock, 1000);
-tickClock();
-
-function formatBangkokDate(dateStr) {
-  // dateStr like "2026-08-14" — treat as a calendar date, display in Thai locale
-  const d = new Date(dateStr + 'T00:00:00+07:00');
-  return d.toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-// ============================================================
-// BOOTSTRAP — one combined load instead of firing requests one by one
-// ============================================================
-async function bootstrap() {
-  setStatus('กำลังดึงข้อมูลบอสเรด, อีเวนต์, สภาพอากาศ และตารางธาตุ…');
-  toggleSpin(true);
-
-  try {
-    const [raidRes, cdayRes, weatherRes, typeRes] = await Promise.all([
-      fetch(API_BASE + 'raid_bosses.json'),
-      fetch(API_BASE + 'community_days.json'),
-      fetch(API_BASE + 'weather_boosts.json'),
-      fetch(API_BASE + 'type_effectiveness.json')
-    ]);
-
-    if (!raidRes.ok || !cdayRes.ok || !weatherRes.ok || !typeRes.ok) {
-      throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
-    }
-
-    const [raid, cdays, weather, types] = await Promise.all([
-      raidRes.json(), cdayRes.json(), weatherRes.json(), typeRes.json()
-    ]);
-
-    raidData = raid;
-    typeChart = types;
-
-    renderTierTabs();
-    renderTypeFilterRow();
-    renderBossGrid();
-    renderCommunityDay(cdays);
-    renderWeather(weather);
-
-    setStatus('เชื่อมต่อสำเร็จ — กดที่การ์ดบอสตัวไหนก็ได้เพื่อดูจุดอ่อน');
-    document.getElementById('lastUpdated').textContent =
-      new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
-  } catch (err) {
-    console.error(err);
-    setStatus('โหลดข้อมูลไม่สำเร็จ ลองกดปุ่มรีเฟรชอีกครั้ง');
-    document.getElementById('bossGrid').innerHTML =
-      '<p class="muted">ไม่สามารถโหลดข้อมูลบอสเรดได้ในตอนนี้</p>';
-  } finally {
-    toggleSpin(false);
-  }
-}
-
-function setStatus(text) {
-  document.getElementById('statusLine').textContent = text;
-}
-
-function toggleSpin(on) {
-  document.getElementById('refreshBtn').classList.toggle('spinning', on);
-}
-
-// ============================================================
-// RAID TIERS
+// RAID TIERS + GRID
 // ============================================================
 function renderTierTabs() {
   const wrap = document.getElementById('tierTabs');
   wrap.innerHTML = '';
-  const bucket = showPrevious ? raidData.previous : raidData.current;
 
-  TIER_ORDER.forEach(tier => {
-    const count = (bucket && bucket[tier]) ? bucket[tier].length : 0;
+  tierOrder.forEach(tier => {
+    const count = raidList.filter(b => b.tier === tier).length;
     const btn = document.createElement('button');
     btn.className = 'tier-tab' + (tier === currentTier ? ' active' : '');
-    btn.textContent = `${TIER_LABEL[tier]} (${count})`;
+    btn.textContent = `${tier} (${count})`;
     btn.setAttribute('role', 'tab');
     btn.addEventListener('click', () => {
       currentTier = tier;
@@ -175,32 +203,26 @@ function renderTierTabs() {
 }
 
 function getVisibleBosses() {
-  const bucket = showPrevious ? raidData.previous : raidData.current;
   const filtersActive = searchQuery.trim() !== '' || selectedTypes.size > 0;
   const q = searchQuery.trim().toLowerCase();
 
   if (!filtersActive) {
-    const list = (bucket && bucket[currentTier]) ? bucket[currentTier] : [];
-    return list.map(b => ({ boss: b, tier: currentTier }));
+    return raidList.filter(b => b.tier === currentTier).map(b => ({ boss: b, tier: b.tier }));
   }
 
-  // search mode — flatten every tier, tag each boss with its tier
-  const out = [];
-  TIER_ORDER.forEach(tier => {
-    const list = (bucket && bucket[tier]) ? bucket[tier] : [];
-    list.forEach(boss => {
-      const nameMatch = !q || boss.name.toLowerCase().includes(q);
-      const typeMatch = selectedTypes.size === 0 ||
-        (boss.type || []).some(t => selectedTypes.has(t));
-      if (nameMatch && typeMatch) out.push({ boss, tier });
-    });
-  });
-  return out;
+  return raidList
+    .filter(b => {
+      const nameMatch = !q || b.name.toLowerCase().includes(q);
+      const bossTypes = (b.types || []).map(t => capitalize(t.name));
+      const typeMatch = selectedTypes.size === 0 || bossTypes.some(t => selectedTypes.has(t));
+      return nameMatch && typeMatch;
+    })
+    .map(b => ({ boss: b, tier: b.tier }));
 }
 
 function renderBossGrid() {
   const grid = document.getElementById('bossGrid');
-  if (!raidData) return;
+  if (!raidList.length) return;
 
   const entries = getVisibleBosses();
   const filtersActive = searchQuery.trim() !== '' || selectedTypes.size > 0;
@@ -219,49 +241,47 @@ function renderBossGrid() {
     card.setAttribute('type', 'button');
     card.setAttribute('aria-haspopup', 'dialog');
 
-    const types = (boss.type || []).map(t =>
+    const typeNames = (boss.types || []).map(t => capitalize(t.name));
+    const typesHtml = typeNames.map(t =>
       `<span class="type-chip" style="background:${TYPE_COLORS[t] || '#999'}">${t}</span>`
     ).join('');
 
-    const weatherChips = (boss.boosted_weather || []).map(w =>
-      `<span class="weather-chip">${w}</span>`
+    const weatherChips = (boss.boostedWeather || []).map(w =>
+      `<span class="weather-chip">${capitalize(w.name)}</span>`
     ).join('');
 
+    const cp = boss.combatPower || {};
+    const normal = cp.normal || {};
+    const boosted = cp.boosted || {};
+
     card.innerHTML = `
-      ${filtersActive ? `<span class="tier-badge">${TIER_LABEL[tier]}</span>` : ''}
+      ${filtersActive ? `<span class="tier-badge">${tier}</span>` : ''}
       <div class="boss-card-top">
         <img class="boss-sprite" loading="lazy"
-             src="${SPRITE_BASE}${boss.id}.png"
+             src="${boss.image}"
              onerror="this.style.visibility='hidden'"
              alt="${boss.name}">
         <div class="boss-name-block">
           <div class="boss-name" title="${boss.name}">${boss.name}</div>
-          ${boss.possible_shiny ? '<div class="boss-shiny">✦ อาจเป็นเชนี่ได้</div>' : ''}
+          ${boss.canBeShiny ? '<div class="boss-shiny">✦ อาจเป็นเชนี่ได้</div>' : ''}
         </div>
       </div>
-      <div class="type-row">${types}</div>
+      <div class="type-row">${typesHtml}</div>
       <div class="cp-row">
-        <span>CP ปกติ: <b>${boss.min_unboosted_cp}–${boss.max_unboosted_cp}</b></span>
-        <span>CP ตอนอากาศบูสต์: <b>${boss.min_boosted_cp}–${boss.max_boosted_cp}</b></span>
+        <span>CP ปกติ: <b>${normal.min ?? '?'}–${normal.max ?? '?'}</b></span>
+        <span>CP ตอนอากาศบูสต์: <b>${boosted.min ?? '?'}–${boosted.max ?? '?'}</b></span>
       </div>
       ${weatherChips ? `<div class="weather-row">${weatherChips}</div>` : ''}
       <div class="tap-hint">แตะเพื่อดูจุดอ่อน →</div>
     `;
-    card.addEventListener('click', () => openBossModal(boss));
+    card.addEventListener('click', () => openBossModal(boss, typeNames));
     grid.appendChild(card);
   });
 }
 
-document.getElementById('prevToggle').addEventListener('change', (e) => {
-  showPrevious = e.target.checked;
-  renderTierTabs();
-  renderBossGrid();
-});
-
 // ============================================================
 // TYPE EFFECTIVENESS — combine dual types the way the games do
 // ============================================================
-// typeChart[attackingType][defendingType] = multiplier (string, e.g. "1.6")
 function computeMatchups(defenderTypes) {
   const attackTypes = Object.keys(TYPE_COLORS);
   const rows = attackTypes.map(atk => {
@@ -295,10 +315,10 @@ function matchupPill(row) {
 const modalEl = document.getElementById('bossModal');
 const modalBody = document.getElementById('modalBody');
 
-function openBossModal(boss) {
+function openBossModal(boss, typeNames) {
   if (!typeChart) return;
 
-  const { weaknesses, resistances, immunities } = computeMatchups(boss.type || []);
+  const { weaknesses, resistances, immunities } = computeMatchups(typeNames);
 
   const weakHtml = weaknesses.length
     ? weaknesses.map(matchupPill).join('')
@@ -308,17 +328,19 @@ function openBossModal(boss) {
     ? resistances.map(matchupPill).join('')
     : '<span class="muted">ไม่มีธาตุที่ต้านได้เป็นพิเศษ</span>';
 
-  const immuneHtml = immunities.length
-    ? immunities.map(matchupPill).join('')
-    : '';
+  const immuneHtml = immunities.length ? immunities.map(matchupPill).join('') : '';
 
-  const typesHtml = (boss.type || []).map(t =>
+  const typesHtml = typeNames.map(t =>
     `<span class="type-chip lg" style="background:${TYPE_COLORS[t] || '#999'}">${t} · ${TYPE_TH[t] || ''}</span>`
   ).join('');
 
+  const cp = boss.combatPower || {};
+  const normal = cp.normal || {};
+  const boosted = cp.boosted || {};
+
   modalBody.innerHTML = `
     <div class="modal-head">
-      <img class="modal-sprite" src="${SPRITE_BASE}${boss.id}.png" onerror="this.style.visibility='hidden'" alt="${boss.name}">
+      <img class="modal-sprite" src="${boss.image}" onerror="this.style.visibility='hidden'" alt="${boss.name}">
       <div>
         <h3>${boss.name}</h3>
         <div class="type-row">${typesHtml}</div>
@@ -344,9 +366,9 @@ function openBossModal(boss) {
     <div class="modal-section">
       <h4>📊 CP โดยประมาณ</h4>
       <div class="cp-row modal-cp">
-        <span>ปกติ: <b>${boss.min_unboosted_cp}–${boss.max_unboosted_cp}</b></span>
-        <span>อากาศบูสต์: <b>${boss.min_boosted_cp}–${boss.max_boosted_cp}</b></span>
-        ${boss.possible_shiny ? '<span class="boss-shiny">✦ ตัวนี้อาจเป็นเชนี่ได้</span>' : ''}
+        <span>ปกติ: <b>${normal.min ?? '?'}–${normal.max ?? '?'}</b></span>
+        <span>อากาศบูสต์: <b>${boosted.min ?? '?'}–${boosted.max ?? '?'}</b></span>
+        ${boss.canBeShiny ? '<span class="boss-shiny">✦ ตัวนี้อาจเป็นเชนี่ได้</span>' : ''}
       </div>
     </div>
   `;
@@ -364,55 +386,66 @@ function closeBossModal() {
 }
 
 document.getElementById('modalCloseBtn').addEventListener('click', closeBossModal);
-modalEl.addEventListener('click', (e) => {
-  if (e.target === modalEl) closeBossModal();
-});
+modalEl.addEventListener('click', (e) => { if (e.target === modalEl) closeBossModal(); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalEl.classList.contains('open')) closeBossModal();
 });
 
 // ============================================================
-// COMMUNITY DAY
+// COMMUNITY DAY (from ScrapedDuck events.json)
 // ============================================================
-function renderCommunityDay(cdays) {
+function renderCommunityDay(events) {
   const body = document.getElementById('cdayBody');
-  if (!Array.isArray(cdays) || cdays.length === 0) {
+  const cdays = (events || []).filter(e => e.eventType === 'community-day');
+
+  if (cdays.length === 0) {
     body.innerHTML = '<p class="muted">ไม่มีข้อมูล Community Day ในขณะนี้</p>';
     return;
   }
 
-  // Pick the most recent by community_day_number
-  const latest = cdays.slice().sort((a, b) => b.community_day_number - a.community_day_number)[0];
+  const now = new Date();
+  // Prefer one that's ongoing or coming up soon; otherwise fall back to the most recent past one
+  const upcoming = cdays
+    .filter(e => !e.end || e.end.endsWith('Z') ? (!e.end || new Date(e.end) >= now) : true)
+    .sort((a, b) => new Date(a.start || 0) - new Date(b.start || 0));
+  const target = upcoming[0] || cdays.sort((a, b) => new Date(b.start || 0) - new Date(a.start || 0))[0];
 
-  const bonuses = (latest.bonuses || []).map(b => `<span class="pill">${b}</span>`).join('');
-  const boosted = (latest.boosted_pokemon || []).map(p => `<span class="pill gold">${p}</span>`).join('');
-  const moves = (latest.event_moves || []).map(m =>
-    `<div class="move-item"><b>${m.pokemon}</b> เรียนรู้ท่า <b>${m.move}</b> (${m.move_type === 'charged' ? 'ท่าพลัง' : 'ท่าไว'})</div>`
-  ).join('') || '<div class="move-item">ไม่มีท่าพิเศษในรอบนี้</div>';
+  const extra = (target.extraData && target.extraData.communityday) || {};
+  const spawns = (extra.spawns || []).map(p =>
+    `<span class="pill gold"><img class="pill-icon" src="${p.image}" alt=""> ${p.name}</span>`
+  ).join('');
+  const bonuses = (extra.bonuses || []).map(b =>
+    `<span class="pill"><img class="pill-icon" src="${b.image}" alt=""> ${b.text}</span>`
+  ).join('');
+  const shinies = (extra.shinies || []).map(s =>
+    `<span class="pill"><img class="pill-icon" src="${s.image}" alt=""> ${s.name}</span>`
+  ).join('');
 
-  const dateLabel = latest.start_date === latest.end_date
-    ? formatBangkokDate(latest.start_date)
-    : `${formatBangkokDate(latest.start_date)} – ${formatBangkokDate(latest.end_date)}`;
+  const dateLabel = target.start
+    ? (target.end ? `${formatEventDate(target.start)} – ${formatEventDate(target.end)}` : formatEventDate(target.start))
+    : 'ยังไม่ประกาศวันที่แน่ชัด';
 
   body.innerHTML = `
     <div>
-      <h3 class="cday-title">Community Day #${latest.community_day_number}</h3>
+      <h3 class="cday-title">${target.name}</h3>
       <div class="cday-dates">${dateLabel}</div>
     </div>
     <div class="cday-grid">
       <div class="cday-block">
-        <h4>โปเกมอนพิเศษ</h4>
-        <div class="pill-row">${boosted || '<span class="pill">ไม่ระบุ</span>'}</div>
+        <h4>โปเกมอนที่ออกเยอะเป็นพิเศษ</h4>
+        <div class="pill-row">${spawns || '<span class="pill">ยังไม่ประกาศ</span>'}</div>
       </div>
       <div class="cday-block">
         <h4>โบนัสช่วงอีเวนต์</h4>
-        <div class="pill-row">${bonuses || '<span class="pill">ไม่ระบุ</span>'}</div>
+        <div class="pill-row">${bonuses || '<span class="pill">ยังไม่ประกาศ</span>'}</div>
       </div>
     </div>
+    ${shinies ? `
     <div class="cday-block">
-      <h4>ท่าพิเศษที่หาได้ในช่วงนี้</h4>
-      ${moves}
-    </div>
+      <h4>เชนี่ที่มีโอกาสเจอในรอบนี้</h4>
+      <div class="pill-row">${shinies}</div>
+    </div>` : ''}
+    ${target.link ? `<a class="cday-link" href="${target.link}" target="_blank" rel="noopener">ดูรายละเอียดเต็มบน LeekDuck →</a>` : ''}
   `;
 }
 
