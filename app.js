@@ -452,6 +452,25 @@ function computeMatchups(defenderTypes) {
   return { weaknesses, resistances, immunities };
 }
 
+// Offensive side: given this Pokemon's own type(s), which defending types
+// take extra damage from its (same-type) attacks? For dual-typed attackers,
+// takes the stronger of its two STAB types against each defender type.
+function computeOffensiveMatchups(attackerTypes) {
+  const defenderTypes = Object.keys(TYPE_COLORS);
+  const rows = defenderTypes.map(def => {
+    let best = 0;
+    attackerTypes.forEach(atk => {
+      const raw = typeChart && typeChart[atk] ? typeChart[atk][def] : undefined;
+      const val = raw !== undefined ? parseFloat(raw) : 1;
+      if (val > best) best = val;
+    });
+    return { type: def, multiplier: Math.round(best * 1000) / 1000 };
+  });
+
+  const strong = rows.filter(r => r.multiplier > 1).sort((a, b) => b.multiplier - a.multiplier);
+  return { strong };
+}
+
 function matchupPill(row) {
   const label = TYPE_TH[row.type] || row.type;
   return `<span class="matchup-pill" style="border-color:${TYPE_COLORS[row.type]}">
@@ -474,6 +493,10 @@ function openBossModal(boss, typeNames) {
     ? computeMatchups(typeNames)
     : { weaknesses: [], resistances: [], immunities: [] };
 
+  const { strong: strongAgainst } = knownTypes
+    ? computeOffensiveMatchups(typeNames)
+    : { strong: [] };
+
   const weakHtml = !chartReady
     ? '<span class="muted">โหลดตารางธาตุไม่สำเร็จตอนนี้ ลองกดรีเฟรชที่มุมขวาบนแล้วเปิดใหม่</span>'
     : !knownTypes
@@ -485,6 +508,12 @@ function openBossModal(boss, typeNames) {
     : resistances.length ? resistances.map(matchupPill).join('') : '<span class="muted">ไม่มีธาตุที่ต้านได้เป็นพิเศษ</span>';
 
   const immuneHtml = knownTypes && immunities.length ? immunities.map(matchupPill).join('') : '';
+
+  const strongHtml = !chartReady
+    ? ''
+    : !knownTypes
+    ? ''
+    : strongAgainst.length ? strongAgainst.map(matchupPill).join('') : '<span class="muted">ไม่มีธาตุที่โดนแรงเป็นพิเศษ</span>';
 
   const typesHtml = knownTypes
     ? typeNames.map(t => `<span class="type-chip lg" style="background:${TYPE_COLORS[t] || '#999'}">${t} · ${TYPE_TH[t] || ''}</span>`).join('')
@@ -508,6 +537,12 @@ function openBossModal(boss, typeNames) {
       <h4>⚔ ใช้ธาตุนี้ตีจะโดนแรงขึ้น (จุดอ่อน)</h4>
       <div class="matchup-row">${weakHtml}</div>
     </div>
+
+    ${strongHtml ? `
+    <div class="modal-section">
+      <h4>🔥 ตัวนี้ตีธาตุไหนแรงเป็นพิเศษ (โจมตี)</h4>
+      <div class="matchup-row">${strongHtml}</div>
+    </div>` : ''}
 
     ${resistHtml ? `
     <div class="modal-section">
