@@ -12,6 +12,9 @@ const EVENTS_URL = 'https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/
 // barely ever change, so a slower-moving community API is fine here.
 // Docs: https://pogoapi.net/documentation
 const POGOAPI_BASE = 'https://pogoapi.net/api/v1/';
+// Full National Dex, name + type only — powers the "search all Pokemon" box.
+const POKEMON_TYPES_URL = POGOAPI_BASE + 'pokemon_types.json';
+const DEX_MAX_RESULTS = 30;
 
 const TIER_CANONICAL_ORDER = ['1-Star Raids', '3-Star Raids', '5-Star Raids', 'Mega Raids', 'Elite Raids'];
 
@@ -64,6 +67,10 @@ let typeChart = null;       // from pogoapi type_effectiveness.json
 let currentTier = null;
 let searchQuery = '';
 let selectedTypes = new Set();
+
+// Full-dex search (separate from the raid-boss search above)
+let dexPokemon = [];        // from pogoapi pokemon_types.json, once loaded
+let dexStatus = 'loading';  // 'loading' | 'ready' | 'error'
 
 // ============================================================
 // CLOCK — always Thailand time, per project convention
@@ -135,6 +142,21 @@ async function bootstrap() {
       const typeRes = await fetch(POGOAPI_BASE + 'type_effectiveness.json');
       if (typeRes.ok) typeChart = await typeRes.json();
     } catch (e) { console.warn('type_effectiveness.json failed:', e); }
+
+    try {
+      const dexRes = await fetch(POKEMON_TYPES_URL);
+      if (dexRes.ok) {
+        dexPokemon = await dexRes.json();
+        dexStatus = 'ready';
+      } else {
+        dexStatus = 'error';
+      }
+    } catch (e) {
+      console.warn('pokemon_types.json failed:', e);
+      dexStatus = 'error';
+    }
+    // Re-render in case the user already typed a query while this was loading.
+    safeRender('Dex search', () => renderDexResults(document.getElementById('dexSearch').value));
 
     // Figure out which tiers actually exist right now, in a sensible order
     const present = new Set(raidList.map(b => b.tier));
@@ -224,6 +246,86 @@ document.getElementById('clearFilters').addEventListener('click', () => {
   renderTypeFilterRow();
   onFiltersChanged();
 });
+
+// ============================================================
+// FULL DEX SEARCH — separate from the raid-boss search above;
+// searches every Pokemon in the National Dex, not just current bosses.
+// ============================================================
+function renderDexResults(rawQuery) {
+  const grid = document.getElementById('dexGrid');
+  const hint = document.getElementById('dexHint');
+  const q = rawQuery.trim().toLowerCase();
+
+  if (dexStatus === 'error') {
+    hint.hidden = false;
+    hint.textContent = 'โหลดรายชื่อโปเกมอนไม่สำเร็จตอนนี้ ลองกดรีเฟรชอีกครั้ง';
+    grid.innerHTML = '';
+    return;
+  }
+  if (dexStatus === 'loading') {
+    hint.hidden = false;
+    hint.textContent = 'กำลังโหลดรายชื่อโปเกมอนทั้งหมด…';
+    grid.innerHTML = '';
+    return;
+  }
+  if (q.length < 2) {
+    hint.hidden = false;
+    hint.textContent = `พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา (มีทั้งหมด ${dexPokemon.length} ตัว)`;
+    grid.innerHTML = '';
+    return;
+  }
+
+  const matches = dexPokemon.filter(p => p.pokemon_name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    hint.hidden = false;
+    hint.textContent = `ไม่พบโปเกมอนที่ตรงกับ "${rawQuery.trim()}"`;
+    grid.innerHTML = '';
+    return;
+  }
+
+  const shown = matches.slice(0, DEX_MAX_RESULTS);
+  hint.hidden = matches.length <= DEX_MAX_RESULTS;
+  if (!hint.hidden) {
+    hint.textContent = `พบ ${matches.length} ตัว แสดง ${shown.length} ตัวแรก — พิมพ์ให้เจาะจงขึ้นเพื่อผลลัพธ์น้อยลง`;
+  }
+
+  grid.innerHTML = '';
+  shown.forEach(p => {
+    const card = document.createElement('button');
+    card.className = 'boss-card';
+    card.setAttribute('type', 'button');
+    card.setAttribute('aria-haspopup', 'dialog');
+
+    const typeNames = p.type || [];
+    const typesHtml = typeNames.map(t =>
+      `<span class="type-chip" style="background:${TYPE_COLORS[t] || '#999'}">${t}</span>`
+    ).join('');
+    const spriteUrl = `${HERO_SPRITE_BASE}${p.pokemon_id}.png`;
+
+    card.innerHTML = `
+      <div class="boss-card-top">
+        <img class="boss-sprite" loading="lazy"
+             src="${spriteUrl}"
+             onerror="this.style.visibility='hidden'"
+             alt="${p.pokemon_name}">
+        <div class="boss-name-block">
+          <div class="boss-name" title="${p.pokemon_name}">${p.pokemon_name}</div>
+        </div>
+      </div>
+      <div class="type-row">${typesHtml}</div>
+      <div class="tap-hint">แตะเพื่อดูจุดอ่อน →</div>
+    `;
+    // Reuses the exact same boss modal as raid bosses — it already handles
+    // a "boss" with no combatPower/canBeShiny/boostedWeather gracefully.
+    card.addEventListener('click', () => openBossModal({ name: p.pokemon_name, image: spriteUrl }, typeNames));
+    grid.appendChild(card);
+  });
+}
+
+document.getElementById('dexSearch').addEventListener('input', (e) => {
+  renderDexResults(e.target.value);
+});
+renderDexResults(''); // show the initial "type to search" hint right away
 
 // ============================================================
 // RAID TIERS + GRID

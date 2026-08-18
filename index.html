@@ -44,6 +44,24 @@
     </div>
   </section>
 
+  <section class="panel" id="dexSection">
+    <div class="panel-head">
+      <h2>ค้นหาโปเกมอนทั้งหมด</h2>
+      <span class="hint">ข้อมูลธาตุจาก PoGo API · ครอบคลุมทุกตัวในเนชันแนลเด็กซ์ (ไม่ใช่แค่บอสเรด)</span>
+    </div>
+
+    <div class="filter-row">
+      <div class="search-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" id="dexSearch" placeholder="พิมพ์ชื่อโปเกมอน เช่น Pikachu…" autocomplete="off">
+      </div>
+    </div>
+
+    <p class="filter-note" id="dexHint">พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา</p>
+
+    <div class="boss-grid" id="dexGrid"></div>
+  </section>
+
   <section class="panel" id="raidSection">
     <div class="panel-head">
       <h2>บอสเรดปัจจุบัน</h2>
