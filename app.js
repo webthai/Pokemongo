@@ -124,34 +124,32 @@ async function bootstrap() {
   toggleSpin(true);
 
   try {
-    const [raidsRes, eventsRes, weatherRes, typeRes] = await Promise.all([
-      fetch(RAIDS_URL),
-      fetch(EVENTS_URL),
-      fetch(POGOAPI_BASE + 'weather_boosts.json'),
-      fetch(POGOAPI_BASE + 'type_effectiveness.json')
-    ]);
+    const [raidsRes, eventsRes] = await Promise.all([fetch(RAIDS_URL), fetch(EVENTS_URL)]);
+    if (!raidsRes.ok || !eventsRes.ok) throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
 
-    if (!raidsRes.ok || !eventsRes.ok || !weatherRes.ok || !typeRes.ok) {
-      throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
-    }
-
-    const [raids, events, weather, types] = await Promise.all([
-      raidsRes.json(), eventsRes.json(), weatherRes.json(), typeRes.json()
-    ]);
-
+    const [raids, events] = await Promise.all([raidsRes.json(), eventsRes.json()]);
     raidList = raids;
-    typeChart = types;
 
-    // Optional enrichment: name -> type lookup for Max Battle bosses.
-    // Fetched separately and non-fatally — if pogoapi's pokemon_types.json
-    // is down or renamed, the rest of the dashboard must still work; boss
-    // weakness lookups just fall back to "ไม่ทราบธาตุ" for that session.
+    // Everything below is best-effort: weather boosts, the type chart, and
+    // the name->type lookup all come from a second, independent service
+    // (pogoapi.net). If that service is slow, rate-limited, or briefly
+    // down, raid bosses / events / Max Battles must still render — only
+    // the weather panel and the weakness-lookup modal should degrade.
+    let weather = null;
+    try {
+      const weatherRes = await fetch(POGOAPI_BASE + 'weather_boosts.json');
+      if (weatherRes.ok) weather = await weatherRes.json();
+    } catch (e) { console.warn('weather_boosts.json failed:', e); }
+
+    try {
+      const typeRes = await fetch(POGOAPI_BASE + 'type_effectiveness.json');
+      if (typeRes.ok) typeChart = await typeRes.json();
+    } catch (e) { console.warn('type_effectiveness.json failed:', e); }
+
     try {
       const pokeTypesRes = await fetch(POGOAPI_BASE + 'pokemon_types.json');
       if (pokeTypesRes.ok) typesByName = buildTypesByName(await pokeTypesRes.json());
-    } catch (typeErr) {
-      console.warn('pokemon_types.json failed to load, weakness lookup for Max Battles will be limited:', typeErr);
-    }
+    } catch (e) { console.warn('pokemon_types.json failed:', e); }
 
     // Figure out which tiers actually exist right now, in a sensible order
     const present = new Set(raidList.map(b => b.tier));
@@ -379,14 +377,15 @@ const modalEl = document.getElementById('bossModal');
 const modalBody = document.getElementById('modalBody');
 
 function openBossModal(boss, typeNames) {
-  if (!typeChart) return;
-
-  const knownTypes = typeNames && typeNames.length > 0;
+  const chartReady = !!typeChart;
+  const knownTypes = chartReady && typeNames && typeNames.length > 0;
   const { weaknesses, resistances, immunities } = knownTypes
     ? computeMatchups(typeNames)
     : { weaknesses: [], resistances: [], immunities: [] };
 
-  const weakHtml = !knownTypes
+  const weakHtml = !chartReady
+    ? '<span class="muted">โหลดตารางธาตุไม่สำเร็จตอนนี้ ลองกดรีเฟรชที่มุมขวาบนแล้วเปิดใหม่</span>'
+    : !knownTypes
     ? '<span class="muted">ไม่ทราบธาตุของบอสตัวนี้ (แหล่งข้อมูลไม่ได้แนบธาตุมาให้)</span>'
     : weaknesses.length ? weaknesses.map(matchupPill).join('') : '<span class="muted">ไม่มีจุดอ่อนธาตุเด่นชัด</span>';
 
@@ -529,6 +528,16 @@ function renderCommunityDay(events) {
   `;
 }
 
+// LeekDuck often doesn't give Max Battle bosses as structured data — the
+// boss name is embedded in the event title instead, e.g.
+// "Dynamax Magikarp during Max Monday". Pull it out so we can still show
+// an icon-free but clickable, name-matched weakness chip.
+function extractBossFromEventName(name) {
+  if (!name) return null;
+  const m = name.match(/^Dynamax\s+(.+?)\s+during\b/i) || name.match(/^Dynamax\s+(.+)$/i);
+  return m ? m[1].trim() : null;
+}
+
 // ============================================================
 // MAX BATTLES / DYNAMAX (from ScrapedDuck events.json)
 // ============================================================
@@ -584,9 +593,20 @@ function renderMaxBattles(events) {
       : '';
 
     const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
-    const bossChipsHtml = bosses.map((b, i) =>
-      `<button type="button" class="max-boss-chip" data-max-idx="${i}"><img src="${b.image}" alt="">${b.name}</button>`
-    ).join('');
+    let bossChipsHtml = '';
+    let clickableBosses = bosses;
+
+    if (bosses.length > 0) {
+      bossChipsHtml = bosses.map((b, i) =>
+        `<button type="button" class="max-boss-chip" data-max-idx="${i}"><img src="${b.image}" alt="">${b.name}</button>`
+      ).join('');
+    } else {
+      const parsedName = extractBossFromEventName(ev.name);
+      if (parsedName) {
+        clickableBosses = [{ name: parsedName, image: ev.image, canBeShiny: undefined }];
+        bossChipsHtml = `<button type="button" class="max-boss-chip" data-max-idx="0">${parsedName}</button>`;
+      }
+    }
 
     const cardId = `max-${evIdx}`;
 
@@ -607,11 +627,17 @@ function renderMaxBattles(events) {
   // innerHTML above wiped any inline listeners)
   maxEvents.forEach((ev, evIdx) => {
     const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
+    const parsedName = extractBossFromEventName(ev.name);
+    const clickableBosses = bosses.length > 0
+      ? bosses
+      : (parsedName ? [{ name: parsedName, image: ev.image, canBeShiny: undefined }] : []);
+
     const row = document.getElementById(`max-${evIdx}`);
     if (!row) return;
     row.querySelectorAll('.max-boss-chip').forEach(chip => {
       const idx = Number(chip.dataset.maxIdx);
-      const boss = bosses[idx];
+      const boss = clickableBosses[idx];
+      if (!boss) return;
       chip.addEventListener('click', () => {
         const types = lookupTypes(boss.name);
         openBossModal({ name: boss.name, image: boss.image, canBeShiny: boss.canBeShiny }, types);
@@ -625,6 +651,10 @@ function renderMaxBattles(events) {
 // ============================================================
 function renderWeather(weather) {
   const grid = document.getElementById('weatherGrid');
+  if (!weather) {
+    grid.innerHTML = '<p class="muted">โหลดตารางสภาพอากาศไม่สำเร็จตอนนี้ ลองกดรีเฟรชอีกครั้ง</p>';
+    return;
+  }
   grid.innerHTML = '';
 
   Object.entries(weather).forEach(([condition, types]) => {
