@@ -15,6 +15,12 @@ const POGOAPI_BASE = 'https://pogoapi.net/api/v1/';
 
 const TIER_CANONICAL_ORDER = ['1-Star Raids', '3-Star Raids', '5-Star Raids', 'Mega Raids', 'Elite Raids'];
 
+// Header icon: a random Pokemon sprite, re-rolled on every load/refresh.
+// Public community sprite mirror (same one previously used for boss art).
+const HERO_SPRITE_BASE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/';
+const HERO_SPRITE_MAX_ID = 1025; // verified: sprite mirror has 1..1025, 1026+ 404s
+const HERO_SPRITE_FALLBACK_ID = 25; // Pikachu — used if a random id happens to 404
+
 const TYPE_COLORS = {
   Normal: '#A8A878', Fire: '#F08030', Water: '#6890F0', Electric: '#F8D030',
   Grass: '#78C850', Ice: '#98D8D8', Fighting: '#C03028', Poison: '#A040A0',
@@ -31,6 +37,23 @@ const TYPE_TH = {
 };
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+// Re-rolls the header icon to a random Pokemon sprite. Called on first load
+// and again every time bootstrap() re-runs (i.e. every refresh click).
+function randomizeHeroPokemon() {
+  const img = document.getElementById('heroPokemon');
+  if (!img) return;
+  const id = 1 + Math.floor(Math.random() * HERO_SPRITE_MAX_ID);
+  img.dataset.triedFallback = 'false';
+  img.onerror = () => {
+    // A handful of dex ids may be missing from the mirror — fall back once
+    // to a known-good sprite rather than showing a broken image.
+    if (img.dataset.triedFallback === 'true') return;
+    img.dataset.triedFallback = 'true';
+    img.src = `${HERO_SPRITE_BASE}${HERO_SPRITE_FALLBACK_ID}.png`;
+  };
+  img.src = `${HERO_SPRITE_BASE}${id}.png`;
+}
 
 // ============================================================
 // STATE
@@ -86,6 +109,7 @@ function toComparableDate(iso) {
 // BOOTSTRAP — one combined load instead of firing requests one by one
 // ============================================================
 async function bootstrap() {
+  randomizeHeroPokemon();
   setStatus('กำลังดึงข้อมูลบอสเรดจาก LeekDuck, อีเวนต์ และตารางธาตุ…');
   toggleSpin(true);
 

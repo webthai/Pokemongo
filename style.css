@@ -157,11 +157,13 @@ a{ color: var(--teal); }
   display: grid;
   place-items: center;
 }
-.orb-core{
-  width: 34px; height: 34px;
+.orb-core-img{
+  width: 52px; height: 52px;
+  object-fit: contain;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #fff, var(--teal) 45%, #0e766c 100%);
+  background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.12), rgba(45,212,191,0.18) 45%, rgba(14,118,108,0.25) 100%);
   box-shadow: 0 0 30px rgba(45,212,191,0.55);
+  padding: 6px;
 }
 .orb-ring{
   position: absolute;
