@@ -32,46 +32,12 @@ const TYPE_TH = {
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
-// Prefixes that appear in raid/event boss names but aren't part of the
-// pokemon_types.json base species name (e.g. "Shadow Onix" -> "Onix").
-const NAME_PREFIXES = ['Shadow', 'Mega', 'Alolan', 'Galarian', 'Hisuian', 'Paldean', 'Primal'];
-
-function buildTypesByName(pokeTypes) {
-  const map = {};
-  (pokeTypes || []).forEach(entry => {
-    const key = entry.pokemon_name.toLowerCase();
-    // don't overwrite a base-form entry with a form-variant one
-    if (!map[key] || !entry.form) map[key] = entry.type;
-    // also index "<Form> <Name>" style keys, e.g. "alolan raichu"
-    if (entry.form && entry.form.toLowerCase() !== 'normal') {
-      map[`${entry.form.toLowerCase()} ${key}`] = entry.type;
-    }
-  });
-  return map;
-}
-
-function lookupTypes(rawName) {
-  if (!rawName) return [];
-  const direct = typesByName[rawName.toLowerCase()];
-  if (direct) return direct;
-
-  for (const prefix of NAME_PREFIXES) {
-    if (rawName.startsWith(prefix + ' ')) {
-      const rest = rawName.slice(prefix.length + 1);
-      const found = typesByName[rest.toLowerCase()];
-      if (found) return found;
-    }
-  }
-  return [];
-}
-
 // ============================================================
 // STATE
 // ============================================================
 let raidList = [];          // flat array from ScrapedDuck
 let tierOrder = [];         // tiers actually present, in canonical order
 let typeChart = null;       // from pogoapi type_effectiveness.json
-let typesByName = {};       // lowercased pokemon name -> ["Fire","Dragon"], from pogoapi pokemon_types.json
 let currentTier = null;
 let searchQuery = '';
 let selectedTypes = new Set();
@@ -133,7 +99,7 @@ async function bootstrap() {
     // Everything below is best-effort: weather boosts, the type chart, and
     // the name->type lookup all come from a second, independent service
     // (pogoapi.net). If that service is slow, rate-limited, or briefly
-    // down, raid bosses / events / Max Battles must still render — only
+    // down, raid bosses / events must still render — only
     // the weather panel and the weakness-lookup modal should degrade.
     let weather = null;
     try {
@@ -145,11 +111,6 @@ async function bootstrap() {
       const typeRes = await fetch(POGOAPI_BASE + 'type_effectiveness.json');
       if (typeRes.ok) typeChart = await typeRes.json();
     } catch (e) { console.warn('type_effectiveness.json failed:', e); }
-
-    try {
-      const pokeTypesRes = await fetch(POGOAPI_BASE + 'pokemon_types.json');
-      if (pokeTypesRes.ok) typesByName = buildTypesByName(await pokeTypesRes.json());
-    } catch (e) { console.warn('pokemon_types.json failed:', e); }
 
     // Figure out which tiers actually exist right now, in a sensible order
     const present = new Set(raidList.map(b => b.tier));
@@ -164,7 +125,6 @@ async function bootstrap() {
     // Each of these is independent — a bug or bad data in one section
     // should never prevent the sections after it from rendering.
     safeRender('Community Day', () => renderCommunityDay(events));
-    safeRender('Max Battles', () => renderMaxBattles(events));
     safeRender('Weather', () => renderWeather(weather));
 
     setStatus('เชื่อมต่อสำเร็จ — ข้อมูลตรงจาก LeekDuck.com · กดที่การ์ดบอสเพื่อดูจุดอ่อน');
@@ -526,124 +486,6 @@ function renderCommunityDay(events) {
     </div>` : ''}
     ${target.link ? `<a class="cday-link" href="${target.link}" target="_blank" rel="noopener">ดูรายละเอียดเต็มบน LeekDuck →</a>` : ''}
   `;
-}
-
-// LeekDuck often doesn't give Max Battle bosses as structured data — the
-// boss name is embedded in the event title instead, e.g.
-// "Dynamax Magikarp during Max Monday". Pull it out so we can still show
-// an icon-free but clickable, name-matched weakness chip.
-function extractBossFromEventName(name) {
-  if (!name) return null;
-  const m = name.match(/^Dynamax\s+(.+?)\s+during\b/i) || name.match(/^Dynamax\s+(.+)$/i);
-  return m ? m[1].trim() : null;
-}
-
-// ============================================================
-// MAX BATTLES / DYNAMAX (from ScrapedDuck events.json)
-// ============================================================
-function isMaxBattleEvent(ev) {
-  if (ev.eventType === 'max-battles' || ev.eventType === 'max-mondays') return true;
-  if (ev.heading && /max/i.test(ev.heading)) return true;
-  if (ev.name && /max\s*(battle|monday)/i.test(ev.name)) return true;
-  return false;
-}
-
-function renderMaxBattles(events) {
-  const body = document.getElementById('maxBody');
-  const now = new Date();
-  const allEvents = events || [];
-
-  // Deliberately NOT filtering out "already ended" events here — ScrapedDuck's
-  // feed only contains current/near-term events anyway, and being strict
-  // about parsing end-dates risks silently dropping a valid live event if
-  // its date string doesn't match our assumptions.
-  const maxEvents = allEvents
-    .filter(isMaxBattleEvent)
-    .sort((a, b) => {
-      const da = toComparableDate(a.start);
-      const db = toComparableDate(b.start);
-      const va = da && !isNaN(da) ? da.getTime() : Infinity;
-      const vb = db && !isNaN(db) ? db.getTime() : Infinity;
-      return va - vb;
-    })
-    .slice(0, 4);
-
-  if (maxEvents.length === 0) {
-    const typesPresent = [...new Set(allEvents.map(e => e.eventType))].slice(0, 8).join(', ') || 'ไม่มีข้อมูลอีเวนต์เลย';
-    body.innerHTML = `
-      <p class="muted">ไม่พบอีเวนต์ Max Battles ในข้อมูลตอนนี้</p>
-      <p class="muted" style="font-size:11px;margin-top:4px;">
-        (debug: พบทั้งหมด ${allEvents.length} อีเวนต์ ประเภทที่เจอ: ${typesPresent})
-      </p>`;
-    return;
-  }
-
-  body.innerHTML = maxEvents.map((ev, evIdx) => {
-    const start = toComparableDate(ev.start);
-    const end = toComparableDate(ev.end);
-    const startValid = start && !isNaN(start);
-    const endValid = end && !isNaN(end);
-    const isLive = startValid && start <= now && (!endValid || end >= now);
-    const stateHtml = isLive
-      ? '<span class="max-state live">กำลังจัดอยู่</span>'
-      : '<span class="max-state upcoming">เร็วๆ นี้</span>';
-
-    const dateLabel = ev.start
-      ? (ev.end ? `${formatEventDate(ev.start)} – ${formatEventDate(ev.end)}` : formatEventDate(ev.start))
-      : '';
-
-    const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
-    let bossChipsHtml = '';
-    let clickableBosses = bosses;
-
-    if (bosses.length > 0) {
-      bossChipsHtml = bosses.map((b, i) =>
-        `<button type="button" class="max-boss-chip" data-max-idx="${i}"><img src="${b.image}" alt="">${b.name}</button>`
-      ).join('');
-    } else {
-      const parsedName = extractBossFromEventName(ev.name);
-      if (parsedName) {
-        clickableBosses = [{ name: parsedName, image: ev.image, canBeShiny: undefined }];
-        bossChipsHtml = `<button type="button" class="max-boss-chip" data-max-idx="0">${parsedName}</button>`;
-      }
-    }
-
-    const cardId = `max-${evIdx}`;
-
-    return `
-      <div class="max-card">
-        ${ev.image ? `<img class="max-icon" src="${ev.image}" onerror="this.style.visibility='hidden'" alt="">` : ''}
-        <div class="max-info">
-          <div class="max-name">${ev.name}</div>
-          ${dateLabel ? `<div class="max-date">${dateLabel}</div>` : ''}
-          ${bossChipsHtml ? `<div class="max-boss-row" id="${cardId}">${bossChipsHtml}</div>` : ''}
-        </div>
-        ${stateHtml}
-      </div>
-    `;
-  }).join('');
-
-  // wire up click handlers for boss chips (delegated per event card, since
-  // innerHTML above wiped any inline listeners)
-  maxEvents.forEach((ev, evIdx) => {
-    const bosses = (ev.extraData && ev.extraData.raidbattles && ev.extraData.raidbattles.bosses) || [];
-    const parsedName = extractBossFromEventName(ev.name);
-    const clickableBosses = bosses.length > 0
-      ? bosses
-      : (parsedName ? [{ name: parsedName, image: ev.image, canBeShiny: undefined }] : []);
-
-    const row = document.getElementById(`max-${evIdx}`);
-    if (!row) return;
-    row.querySelectorAll('.max-boss-chip').forEach(chip => {
-      const idx = Number(chip.dataset.maxIdx);
-      const boss = clickableBosses[idx];
-      if (!boss) return;
-      chip.addEventListener('click', () => {
-        const types = lookupTypes(boss.name);
-        openBossModal({ name: boss.name, image: boss.image, canBeShiny: boss.canBeShiny }, types);
-      });
-    });
-  });
 }
 
 // ============================================================
