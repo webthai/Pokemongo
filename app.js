@@ -1,4 +1,9 @@
 // ============================================================
+// RAID Pokemon Go Hub
+// Copyright (c) 2026 webthai — MIT License
+// https://github.com/webthai/Pokemongo
+// (ใช้/แก้/แจกจ่ายต่อได้อิสระ ขอแค่คงเครดิตนี้ไว้ ตามเงื่อนไข MIT License)
+// ============================================================
 // CONFIG
 // ============================================================
 // Raid & event data: ScrapedDuck — scrapes LeekDuck.com directly (with
