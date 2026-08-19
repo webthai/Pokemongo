@@ -72,6 +72,16 @@ a{ color: var(--teal); }
 
 .topbar-left{ display: flex; align-items: center; gap: 10px; }
 
+.offline-banner{
+  padding: 8px 24px;
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #1a1204;
+  background: var(--gold);
+  letter-spacing: 0.01em;
+}
+
 .dot{
   width: 8px; height: 8px;
   border-radius: 50%;

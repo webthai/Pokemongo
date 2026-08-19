@@ -681,4 +681,28 @@ function renderWeather(weather) {
 // ============================================================
 document.getElementById('refreshBtn').addEventListener('click', bootstrap);
 
+// ============================================================
+// OFFLINE SUPPORT
+// ============================================================
+// The banner reflects real browser connectivity. Actual data staleness is
+// handled by sw.js: it serves the last successfully cached raid/event/dex
+// response whenever a fetch fails, so bootstrap() keeps working offline —
+// this banner just tells the user that's what's happening.
+function updateOfflineBanner() {
+  const banner = document.getElementById('offlineBanner');
+  if (!banner) return;
+  banner.hidden = navigator.onLine;
+}
+window.addEventListener('online', updateOfflineBanner);
+window.addEventListener('offline', updateOfflineBanner);
+updateOfflineBanner();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch((err) => {
+      console.warn('Service worker registration failed:', err);
+    });
+  });
+}
+
 bootstrap();
